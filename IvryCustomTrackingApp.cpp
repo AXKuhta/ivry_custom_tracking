@@ -154,21 +154,18 @@ void reset_cmd_buffer() {
 // Returns cmd_buffer if a newline-terminated string was formed
 // Returns NULL otherwise
 char* getcmd() {
-	int bytes_available = CMD_BUFFER_LEN;
 	int bytes_recv = 0;
 
-	if (bytes_available > 0) {
-		bytes_recv = recv(connection, cmd_buffer + cmd_buffer_offset, (CMD_BUFFER_LEN - cmd_buffer_offset), 0);
-		cmd_buffer_offset += bytes_recv;
+	bytes_recv = recv(connection, cmd_buffer + cmd_buffer_offset, (CMD_BUFFER_LEN - cmd_buffer_offset), 0);
+	cmd_buffer_offset += bytes_recv;
 		
-		if (bytes_recv == 0) {
-			// Zero bytes read from a blocking recv() is a sign of lost connection
-			return NULL;
-		}
+	if (bytes_recv == 0) {
+		// Zero bytes read from a blocking recv() is a sign of lost connection
+		return NULL;
+	}
 
-		if (cmd_buffer[cmd_buffer_offset - 1] == '\n') {
-			return cmd_buffer;
-		}
+	if (cmd_buffer[cmd_buffer_offset - 1] == '\n') {
+		return cmd_buffer;
 	}
 
 	return NULL;
