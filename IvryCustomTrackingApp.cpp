@@ -256,7 +256,7 @@ DWORD IvryCustomTrackingApp::Run()
 				if (!Connected()) {
 					connection = accept(listening_socket, NULL, NULL);
 
-					WriteLine("Hello! Connection was reestablished\n");
+					WriteLine("Hello! Connection was reestablished\r\n");
 
 					reset_cmd_buffer();
 
@@ -264,17 +264,17 @@ DWORD IvryCustomTrackingApp::Run()
 					cmd = getcmd();
 
 					if (cmd) {
-						WriteLine("Got a command!\n");
+						WriteLine("Got a command!\r\n");
 
 						// Position change handling
 						if (memcmp(cmd, "Pos", 3) == 0) {
-							WriteLine("-> Positioning command\n");
+							WriteLine("-> Positioning command\r\n");
 
 							sscanf(cmd + 4, "%f %f %f", &x, &y, &z);
 
 							char buf2[256];
 
-							sprintf(&buf2[0], "-> Values: %f %f %f\n", x, y, z);
+							sprintf(&buf2[0], "-> Values: %f %f %f\r\n", x, y, z);
 
 							WriteLine(&buf2[0]);
 
@@ -284,13 +284,13 @@ DWORD IvryCustomTrackingApp::Run()
 						}
 						// Rotation change handling
 						else if (memcmp(cmd, "Rot", 3) == 0)  {
-							WriteLine("-> Rotation command\n");
+							WriteLine("-> Rotation command\r\n");
 							// ...
 						}
 						else {
 							WriteLine("-> Unrecognized command: ");
 							WriteLine(cmd);
-							WriteLine("\n");
+							WriteLine("\r\n");
 						}
 
 						reset_cmd_buffer();
@@ -298,7 +298,7 @@ DWORD IvryCustomTrackingApp::Run()
 				}
 			}
 			
-			WriteLine("Exiting per driver request\n");
+			WriteLine("Exiting per driver request\r\n");
 
 			// Disable external tracking
 			TrackingEnabled(false);
