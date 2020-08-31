@@ -156,7 +156,6 @@ void reset_cmd_buffer() {
 char* getcmd() {
 	int bytes_available = CMD_BUFFER_LEN;
 	int bytes_recv = 0;
-	int flow_flag = 0;
 
 	if (bytes_available > 0) {
 		bytes_recv = recv(connection, cmd_buffer + cmd_buffer_offset, (CMD_BUFFER_LEN - cmd_buffer_offset), 0);
