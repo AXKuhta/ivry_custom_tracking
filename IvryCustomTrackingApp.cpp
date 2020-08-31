@@ -18,7 +18,139 @@
 *
 ***************************************************************************/
 
+#include <winsock2.h>
+#include <Ws2tcpip.h>
 #include "IvryCustomTrackingApp.h"
+
+// Socket prerequisites
+// ==========================================
+#pragma comment(lib, "Ws2_32.lib")
+
+int WinsockInit(void) {
+	WSADATA wsa_data;
+	return WSAStartup(MAKEWORD(1, 1), &wsa_data);
+}
+
+int WinsockQuit(void) {
+	return WSACleanup();
+}
+
+SOCKET listening_socket;
+SOCKET connection;
+
+// Taken from https://github.com/bmx-ng/pub.mod/blob/master/stdc.mod/stdc.c
+int select_(int n_read, int* r_socks, int n_write, int* w_socks, int n_except, int* e_socks, int millis) {
+
+	int i, n, r;
+	struct timeval tv, * tvp;
+	fd_set r_set, w_set, e_set;
+
+	n = -1;
+
+	FD_ZERO(&r_set);
+	for (i = 0; i < n_read; ++i) {
+		FD_SET(r_socks[i], &r_set);
+		if (r_socks[i] > n) n = r_socks[i];
+	}
+	FD_ZERO(&w_set);
+	for (i = 0; i < n_write; ++i) {
+		FD_SET(w_socks[i], &w_set);
+		if (w_socks[i] > n) n = w_socks[i];
+	}
+	FD_ZERO(&e_set);
+	for (i = 0; i < n_except; ++i) {
+		FD_SET(e_socks[i], &e_set);
+		if (e_socks[i] > n) n = e_socks[i];
+	}
+
+	if (millis < 0) {
+		tvp = 0;
+	}
+	else {
+		tv.tv_sec = millis / 1000;
+		tv.tv_usec = (millis % 1000) * 1000;
+		tvp = &tv;
+	}
+
+	r = select(n + 1, &r_set, &w_set, &e_set, tvp);
+	if (r < 0) return r;
+
+	for (i = 0; i < n_read; ++i) {
+		if (!FD_ISSET(r_socks[i], &r_set)) r_socks[i] = 0;
+	}
+	for (i = 0; i < n_write; ++i) {
+		if (!FD_ISSET(w_socks[i], &w_set)) w_socks[i] = 0;
+	}
+	for (i = 0; i < n_except; ++i) {
+		if (!FD_ISSET(e_socks[i], &e_set)) e_socks[i] = 0;
+	}
+	return r;
+}
+
+
+// Checks if the connection is present
+int Connected() {
+	if (!connection)
+		return 0;
+
+	if (connection == SOCKET_ERROR)
+		return 0;
+
+	// Storing the handle into a new variable is somehow important?
+	// The socket seems to just die otherwise
+	int handle = (int)connection;
+
+	if (select_(1, &handle, 0, NULL, 0, NULL, 0) != 1)
+		return 1;
+
+	// Connection failure if this code is reached
+	// Make sure the socket is closed
+	if (connection) {
+		closesocket(connection);
+		connection = 0;
+	}
+}
+
+// Writes a line to client
+int WriteLine(char* line) {
+	send(connection, line, strlen(line), 0);
+
+	return 1;
+}
+
+// Reads a line from client, one byte at a time
+// Yucky
+char* ReadLine() {
+	char buffer[256];
+
+	int bytes_recv = 0;
+	int bytes_total = 0;
+
+	while (1) {
+		bytes_recv = recv(connection, &buffer[0] + bytes_total, 256, 0);
+		
+		if (bytes_recv == 0)
+			return NULL;
+
+		bytes_total += bytes_recv;
+
+		if (buffer[bytes_total - 1] == '\n')
+			break;
+	}
+
+	// Insert a null terminator in place of newline
+	buffer[bytes_total - 1] = '\0';
+
+	return &buffer[0];
+}
+
+
+// ==========================================
+
+// Global variables that will override the position
+double XPosOverride = 0;
+double YPosOverride = 1;
+double ZPosOverride = 0;
 
 IvryCustomTrackingApp::IvryCustomTrackingApp()
 	: m_hQuitEvent(INVALID_HANDLE_VALUE)
@@ -44,6 +176,37 @@ DWORD IvryCustomTrackingApp::Run()
 {
 	DWORD result = ERROR_SUCCESS;
 
+	// Init our socket subsystem
+	WinsockInit();
+
+	// Create a TCP socket
+	listening_socket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+
+	// Bind it (messy)
+	struct addrinfo addr;
+	struct addrinfo *addr_result;
+	
+	memset(&addr, 0, sizeof(addr));
+
+	addr.ai_family = AF_INET;
+	addr.ai_socktype = SOCK_STREAM;
+	addr.ai_protocol = IPPROTO_TCP;
+	addr.ai_flags = AI_PASSIVE;
+
+	getaddrinfo(NULL, "8021", &addr, &addr_result);
+
+	int status = bind(listening_socket, addr_result->ai_addr, (int)addr_result->ai_addrlen);
+
+	if (status == SOCKET_ERROR) {
+		LogMessage("Failed to bind to port 8021\n");
+	}
+
+	// Start listening; max connection backlog of 1
+	listen(listening_socket, 1);
+
+	float x, y, z;
+	char* cmd;
+
 	// Open connection to driver
 	if (Open())
 	{
@@ -61,8 +224,54 @@ DWORD IvryCustomTrackingApp::Run()
 			// Enable external tracking
 			TrackingEnabled(true);
 
-			// Wait for quit event
-			::WaitForSingleObject(m_hQuitEvent, INFINITE);
+			while (1) {
+				// Wait 10 ms for quit event on each iteration
+				if (::WaitForSingleObject(m_hQuitEvent, 10) != WAIT_TIMEOUT)
+					break;
+
+				// If there's no connection, try to establish it
+				if (!Connected()) {
+					connection = accept(listening_socket, NULL, NULL);
+
+					WriteLine("Hello! Connection was reestablished\n");
+
+				} else {
+					cmd = ReadLine();
+
+					if (cmd) {
+						WriteLine("Got a command!\n");
+
+						// Position change handling
+						if (memcmp(cmd, "Pos", 3) == 0) {
+							WriteLine("-> Positioning command\n");
+
+							sscanf(cmd + 4, "%f %f %f", &x, &y, &z);
+
+							char buf2[256];
+
+							sprintf(&buf2[0], "-> Values: %f %f %f\n", x, y, z);
+
+							WriteLine(&buf2[0]);
+
+							XPosOverride = x;
+							YPosOverride = y;
+							ZPosOverride = z;
+						}
+						// Rotation change handling
+						else if (memcmp(cmd, "Rot", 3) == 0)  {
+							WriteLine("-> Rotation command\n");
+							// ...
+						}
+						else {
+							WriteLine("-> Unrecognized command: ");
+							WriteLine(cmd);
+							WriteLine("\n");
+						}
+					}
+				}
+			}
+			
+			WriteLine("Exiting per driver request\n");
 
 			// Disable external tracking
 			TrackingEnabled(false);
@@ -85,6 +294,9 @@ DWORD IvryCustomTrackingApp::Run()
 		result = this->GetLastError();
 	}
 
+	// Socket cleanup
+	WinsockQuit();
+
 	return result;
 }
 
@@ -100,30 +312,10 @@ void IvryCustomTrackingApp::OnDevicePoseUpdated(const vr::DriverPose_t &pose)
 		updatedPose.qRotation = { 1, 0, 0, 0 };
 	}
 
-	// Simulate position with arrow keys
-	// Shift and up/down arrow for height
-	bool shiftDown = (::GetAsyncKeyState(VK_LSHIFT) || ::GetAsyncKeyState(VK_RSHIFT));
-	if (::GetAsyncKeyState(VK_UP))
-	{
-		m_afPosition[shiftDown ? 1 : 2] += 0.001;
-	}
-	if (::GetAsyncKeyState(VK_DOWN))
-	{
-		m_afPosition[shiftDown ? 1 : 2] -= 0.001;
-	}
-	if (::GetAsyncKeyState(VK_LEFT))
-	{
-		m_afPosition[0] += 0.001;
-	}
-	if (::GetAsyncKeyState(VK_RIGHT))
-	{
-		m_afPosition[0] -= 0.001;
-	}
-
-	// Use tracker position
-	updatedPose.vecPosition[0] = m_afPosition[0];
-	updatedPose.vecPosition[1] = m_afPosition[1];
-	updatedPose.vecPosition[2] = m_afPosition[2];
+	// Use the overriden positions
+	updatedPose.vecPosition[0] = XPosOverride;
+	updatedPose.vecPosition[1] = YPosOverride;
+	updatedPose.vecPosition[2] = ZPosOverride;
 
 	// Send tracker pose to driver
 	PoseUpdated(updatedPose);
