@@ -227,7 +227,7 @@ DWORD IvryCustomTrackingApp::Run()
 	// Initialize the command buffer
 	cmd_buffer = (char*)malloc(CMD_BUFFER_LEN);
 
-	float x, y, z;
+	double x, y, z;
 	char* cmd;
 
 	// Open connection to driver
@@ -270,11 +270,11 @@ DWORD IvryCustomTrackingApp::Run()
 						if (memcmp(cmd, "Pos", 3) == 0) {
 							WriteLine("-> Positioning command\r\n");
 
-							sscanf(cmd + 4, "%f %f %f", &x, &y, &z);
+							sscanf(cmd + 4, "%lf %lf %lf", &x, &y, &z);
 
 							char buf2[256];
 
-							sprintf(&buf2[0], "-> Values: %f %f %f\r\n", x, y, z);
+							sprintf(&buf2[0], "-> Values: %lf %lf %lf\r\n", x, y, z);
 
 							WriteLine(&buf2[0]);
 
