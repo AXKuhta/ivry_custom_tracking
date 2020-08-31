@@ -111,46 +111,70 @@ int Connected() {
 	}
 }
 
+// Unreliable -- do not use
+int ReadAvail() {
+	int status;
+	u_long n = 0;
+	
+	status = ioctlsocket(connection, FIONREAD, &n);
+
+	// Returns non-zero on error
+	if (status != 0)
+		return 0;
+
+	return (int)n;
+}
+
 // Writes a line to client
 int WriteLine(char* line) {
 	send(connection, line, strlen(line), 0);
 
 	return 1;
 }
-
-// Reads a line from client, one byte at a time
-// Yucky
-char* ReadLine() {
-	char buffer[256];
-
-	int bytes_recv = 0;
-	int bytes_total = 0;
-
-	while (1) {
-		bytes_recv = recv(connection, &buffer[0] + bytes_total, 256, 0);
-		
-		if (bytes_recv == 0)
-			return NULL;
-
-		bytes_total += bytes_recv;
-
-		if (buffer[bytes_total - 1] == '\n')
-			break;
-	}
-
-	// Insert a null terminator in place of newline
-	buffer[bytes_total - 1] = '\0';
-
-	return &buffer[0];
-}
-
-
 // ==========================================
 
 // Global variables that will override the position
 double XPosOverride = 0;
 double YPosOverride = 1;
 double ZPosOverride = 0;
+
+// Command buffer
+// ==========================================
+#define CMD_BUFFER_LEN 256
+
+char* cmd_buffer;
+int cmd_buffer_offset = 0;
+
+void reset_cmd_buffer() {
+	memset(cmd_buffer, 0, CMD_BUFFER_LEN);
+	cmd_buffer_offset = 0;
+}
+
+// Pulls the available amount of bytes into the command buffer and tries to detect a newline
+// Returns cmd_buffer if a newline-terminated string was formed
+// Returns NULL otherwise
+char* getcmd() {
+	int bytes_available = CMD_BUFFER_LEN;
+	int bytes_recv = 0;
+	int flow_flag = 0;
+
+	if (bytes_available > 0) {
+		bytes_recv = recv(connection, cmd_buffer + cmd_buffer_offset, (CMD_BUFFER_LEN - cmd_buffer_offset), 0);
+		cmd_buffer_offset += bytes_recv;
+		
+		if (bytes_recv == 0) {
+			// Zero bytes read from a blocking recv() is a sign of lost connection
+			return NULL;
+		}
+
+		if (cmd_buffer[cmd_buffer_offset - 1] == '\n') {
+			return cmd_buffer;
+		}
+	}
+
+	return NULL;
+}
+// ==========================================
 
 IvryCustomTrackingApp::IvryCustomTrackingApp()
 	: m_hQuitEvent(INVALID_HANDLE_VALUE)
@@ -201,8 +225,11 @@ DWORD IvryCustomTrackingApp::Run()
 		LogMessage("Failed to bind to port 8021\n");
 	}
 
-	// Start listening; max connection backlog of 1
-	listen(listening_socket, 1);
+	// Start listening; max connection backlog of 0
+	listen(listening_socket, 0);
+
+	// Initialize the command buffer
+	cmd_buffer = (char*)malloc(CMD_BUFFER_LEN);
 
 	float x, y, z;
 	char* cmd;
@@ -235,8 +262,10 @@ DWORD IvryCustomTrackingApp::Run()
 
 					WriteLine("Hello! Connection was reestablished\n");
 
+					reset_cmd_buffer();
+
 				} else {
-					cmd = ReadLine();
+					cmd = getcmd();
 
 					if (cmd) {
 						WriteLine("Got a command!\n");
@@ -267,6 +296,8 @@ DWORD IvryCustomTrackingApp::Run()
 							WriteLine(cmd);
 							WriteLine("\n");
 						}
+
+						reset_cmd_buffer();
 					}
 				}
 			}
@@ -296,6 +327,9 @@ DWORD IvryCustomTrackingApp::Run()
 
 	// Socket cleanup
 	WinsockQuit();
+
+	// Free the command buffer memory
+	free(cmd_buffer);
 
 	return result;
 }
